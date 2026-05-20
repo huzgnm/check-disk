@@ -53,14 +53,14 @@ sudo apk add smartmontools sysstat util-linux
 
 ```bash
 # Clone repo
-git clone https://github.com/<your-username>/disk-health-check.git
+git clone https://github.com/huzgnm/disk-health-check.git
 cd disk-health-check
 
 # Set executable
 chmod +x disk_health_check.sh
 
 # Hoặc tải trực tiếp
-wget https://raw.githubusercontent.com/<your-username>/disk-health-check/main/disk_health_check.sh
+wget https://raw.githubusercontent.com/huzgnm/disk-health-check/main/disk_health_check.sh
 chmod +x disk_health_check.sh
 ```
 
