@@ -1,6 +1,6 @@
 #!/bin/bash
 #==============================================================================
-# Disk Health Check Script v2.0
+# Disk Health Check Script v2.2
 # Author: For Hung (VPNNGA.COM / Dataz.vn)
 # Mục đích: Check toàn diện sức khỏe và thông số disk trên Linux server/VPS
 # Hỗ trợ: Debian/Ubuntu, RHEL/CentOS/Rocky, Arch, Alpine
@@ -274,16 +274,16 @@ check_dependencies() {
 # ============================================================
 show_system_info() {
     print_header "1. THÔNG TIN HỆ THỐNG"
-    echo -e "Hostname     : ${GREEN}$(hostname)${NC}"
+    echo -e "Tên máy      : ${GREEN}$(hostname)${NC}"
     echo -e "OS           : ${GREEN}${OS_NAME}${NC}"
     echo -e "OS Family    : ${GREEN}${OS_FAMILY}${NC}"
     echo -e "Kernel       : ${GREEN}$(uname -r)${NC}"
-    echo -e "Architecture : ${GREEN}$(uname -m)${NC}"
+    echo -e "Kiến trúc    : ${GREEN}$(uname -m)${NC}"
 
     if [ "$VIRT_TYPE" != "none" ] && [ -n "$VIRT_TYPE" ]; then
-        echo -e "Virtualization: ${YELLOW}${VIRT_TYPE}${NC} (một số check SMART có thể không khả dụng)"
+        printf "Ảo hoá       : ${YELLOW}%s${NC} (một số check SMART có thể không khả dụng)\n" "$VIRT_TYPE"
     else
-        echo -e "Virtualization: ${GREEN}bare-metal / không phát hiện${NC}"
+        printf "Ảo hoá       : ${GREEN}bare-metal / không phát hiện${NC}\n"
     fi
 
     echo -e "Uptime       : ${GREEN}$(uptime -p 2>/dev/null || uptime)${NC}"
@@ -471,10 +471,25 @@ show_smart_info() {
             [ -n "$wear" ] && echo "    SSD Health   : $wear"
         fi
 
-        # Data written
+        # Data written - parse khác cho NVMe vs SATA
         local written
-        written=$(echo "$smart_output" | grep -iE "Total_LBAs_Written|Data Units Written" | awk '{print $NF}' | head -1)
-        [ -n "$written" ] && echo "    Data Written : $written"
+        if [ "$DISK_TYPE" = "nvme" ]; then
+            # NVMe format: "Data Units Written:                 1,234,567 [632 TB]"
+            written=$(echo "$smart_output" | grep -i "Data Units Written" | sed -E 's/.*\[([^]]+)\].*/\1/' | head -1)
+            if [ -z "$written" ]; then
+                # Fallback nếu không có giá trị trong [ ]
+                written=$(echo "$smart_output" | grep -i "Data Units Written" | awk -F: '{print $2}' | xargs | head -1)
+            fi
+        else
+            # SATA SSD/HDD format: "Total_LBAs_Written ... 123456789"
+            local lbas
+            lbas=$(echo "$smart_output" | grep -i "Total_LBAs_Written" | awk '{print $NF}' | head -1)
+            if [ -n "$lbas" ] && [[ "$lbas" =~ ^[0-9]+$ ]]; then
+                # LBA * 512 bytes / 1024^4 = TB
+                written=$(awk -v l="$lbas" 'BEGIN{printf "%.2f TB", l*512/1099511627776}')
+            fi
+        fi
+        [ -n "$written" ] && echo "    Đã ghi       : $written"
 
         echo ""
     done
@@ -487,8 +502,8 @@ show_io_stats() {
     print_header "5. I/O PERFORMANCE"
 
     if command -v iostat &>/dev/null; then
-        print_sub "Disk I/O Statistics (mẫu 2 giây)"
-        iostat -xh 2 2 2>/dev/null | tail -n +4
+        print_sub "Disk I/O Statistics (mẫu 2 giây, đã lọc loop/ram)"
+        iostat -xh 2 2 2>/dev/null | tail -n +4 | grep -vE "^\s+(loop|ram|sr)[0-9]"
     else
         echo -e "${YELLOW}⚠ iostat chưa cài. Cài bằng: sudo $PKG_INSTALL sysstat${NC}"
     fi
@@ -533,10 +548,13 @@ show_mount_info() {
 show_kernel_errors() {
     print_header "7. LỖI DISK TRONG KERNEL LOG"
     local errors
-    errors=$(dmesg 2>/dev/null | grep -iE "error|fail|i/o error|bad sector|read-only|EXT4-fs error|remount" | \
-             grep -iE "sd|nvme|disk|ata|vd[a-z]" | tail -n 10)
+    # Lọc keyword lỗi liên quan disk, loại false positive (kernel write-protect, boot msg, etc.)
+    errors=$(dmesg 2>/dev/null | \
+        grep -iE "i/o error|bad sector|EXT[234]-fs error|XFS.*error|remount.*read-only|medium error|hardware error|sense key|aborted command|smart.*fail" | \
+        grep -ivE "Write protecting|read-only data|page_owner|memory init" | \
+        tail -n 10)
     if [ -z "$errors" ]; then
-        echo -e "${GREEN}✓ Không phát hiện lỗi disk trong kernel log${NC}"
+        echo -e "${GREEN}✓ Không phát hiện lỗi disk nghiêm trọng trong kernel log${NC}"
     else
         echo -e "${RED}⚠ Cảnh báo (10 dòng gần nhất):${NC}"
         echo "$errors"
@@ -626,7 +644,7 @@ show_summary() {
 main() {
     echo -e "${BOLD}${CYAN}"
     echo "╔════════════════════════════════════════════════════════════════════╗"
-    echo "║       DISK HEALTH CHECK v2.0 - Linux Server/VPS Monitor           ║"
+    echo "║       DISK HEALTH CHECK v2.2 - Linux Server/VPS Monitor           ║"
     echo "╚════════════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 
