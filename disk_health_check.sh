@@ -211,16 +211,62 @@ check_dependencies() {
         fi
     done
 
-    if [ ${#missing[@]} -ne 0 ]; then
-        echo -e "${YELLOW}⚠ Thiếu công cụ: ${missing[*]}${NC}"
-        if [ -n "$PKG_INSTALL" ]; then
-            echo -e "${YELLOW}  Cài đặt cho ${OS_FAMILY}:${NC}"
-            echo -e "  ${GREEN}sudo $PKG_INSTALL $PKG_NAMES${NC}"
-        else
-            echo -e "${YELLOW}  Không xác định được package manager. Cài thủ công: $PKG_NAMES${NC}"
-        fi
-        echo ""
+    if [ ${#missing[@]} -eq 0 ]; then
+        return
     fi
+
+    echo -e "${YELLOW}⚠ Thiếu công cụ: ${missing[*]}${NC}"
+
+    # Cần root để cài
+    if [[ $EUID -ne 0 ]]; then
+        echo -e "${RED}  Cần chạy với sudo để tự động cài đặt. Bỏ qua phần SMART/IO.${NC}"
+        echo ""
+        return
+    fi
+
+    if [ -z "$PKG_INSTALL" ]; then
+        echo -e "${RED}  Không xác định được package manager (OS: ${OS_FAMILY}). Bỏ qua.${NC}"
+        echo ""
+        return
+    fi
+
+    echo -e "${CYAN}→ Đang tự động cài đặt: $PKG_NAMES${NC}"
+
+    # Update package index trước (Debian/Ubuntu/Alpine)
+    case "$OS_FAMILY" in
+        debian)
+            DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>/dev/null
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $PKG_NAMES >/dev/null 2>&1
+            ;;
+        rhel)
+            $PKG_INSTALL $PKG_NAMES >/dev/null 2>&1
+            ;;
+        arch)
+            pacman -Sy --noconfirm $PKG_NAMES >/dev/null 2>&1
+            ;;
+        alpine)
+            apk update >/dev/null 2>&1
+            apk add $PKG_NAMES >/dev/null 2>&1
+            ;;
+        suse)
+            zypper --non-interactive install $PKG_NAMES >/dev/null 2>&1
+            ;;
+    esac
+
+    # Verify lại
+    local still_missing=()
+    for cmd in smartctl iostat; do
+        if ! command -v "$cmd" &>/dev/null; then
+            still_missing+=("$cmd")
+        fi
+    done
+
+    if [ ${#still_missing[@]} -eq 0 ]; then
+        echo -e "${GREEN}✓ Cài đặt thành công${NC}"
+    else
+        echo -e "${YELLOW}⚠ Vẫn thiếu: ${still_missing[*]} (sẽ skip các check liên quan)${NC}"
+    fi
+    echo ""
 }
 
 # ============================================================
@@ -578,8 +624,6 @@ show_summary() {
 # MAIN
 # ============================================================
 main() {
-    [ "$NO_COLOR" -eq 0 ] && clear
-
     echo -e "${BOLD}${CYAN}"
     echo "╔════════════════════════════════════════════════════════════════════╗"
     echo "║       DISK HEALTH CHECK v2.0 - Linux Server/VPS Monitor           ║"
@@ -604,7 +648,7 @@ main() {
         show_top_directories
     else
         echo ""
-        echo -e "${CYAN}💡 Chạy với --full để quét thêm top thư mục lớn${NC}"
+        echo -e "${CYAN}💡 Thêm flag --full để quét top thư mục lớn (chậm hơn)${NC}"
     fi
 
     show_summary
